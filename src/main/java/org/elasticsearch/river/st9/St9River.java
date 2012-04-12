@@ -176,32 +176,30 @@ public class St9River extends AbstractRiverComponent implements River {
             }
 
             queue.add(message);
-
-            System.out.println("queue! " + queue);
         }
 
         @Override
         public void onPSubscribe(byte[] topic, int totalSubscribed) {
             logger.info("subscribed to pattern [{}], totalSubscribed={}",
-                    topic, totalSubscribed);
+                    new String(topic), totalSubscribed);
         }
 
         @Override
         public void onSubscribe(byte[] topic, int totalSubscribed) {
-            logger.info("subscribed to topic [{}], totalSubscribed={}", topic,
-                    totalSubscribed);
+            logger.info("subscribed to topic [{}], totalSubscribed={}",
+                    new String(topic), totalSubscribed);
         }
 
         @Override
         public void onPUnsubscribe(byte[] topic, int totalSubscribed) {
             logger.info("unsubscribed from pattern [{}], totalSubscribed={}",
-                    topic, totalSubscribed);
+                    new String(topic), totalSubscribed);
         }
 
         @Override
         public void onUnsubscribe(byte[] topic, int totalSubscribed) {
             logger.info("unsubscribed from topic [{}], totalSubscribed={}",
-                    topic, totalSubscribed);
+                    new String(topic), totalSubscribed);
         }
     }
 

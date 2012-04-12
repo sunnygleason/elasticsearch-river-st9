@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<assembly>
+	<id>plugin</id>
+	<formats>
+		<format>zip</format>
+	</formats>
+	<includeBaseDirectory>false</includeBaseDirectory>
+	<dependencySets>
+		<dependencySet>
+			<outputDirectory>/</outputDirectory>
+			<useProjectArtifact>true</useProjectArtifact>
+			<useTransitiveFiltering>true</useTransitiveFiltering>
+			<excludes>
+				<exclude>org.elasticsearch:elasticsearch</exclude>
+			</excludes>
+		</dependencySet>
+		<dependencySet>
+			<outputDirectory>/</outputDirectory>
+			<useProjectArtifact>true</useProjectArtifact>
+			<useTransitiveFiltering>true</useTransitiveFiltering>
+			<includes>
+				<include>redis.clients:jedis</include>
+				<include>org.codehaus.jackson:jackson-core-asl</include>
+				<include>org.codehaus.jackson:jackson-mapper-asl</include>
+				<include>org.codehaus.jackson:jackson-smile</include>
+				<include>com.g414.codec:g414-codec</include>
+			</includes>
+		</dependencySet>
+	</dependencySets>
+</assembly>

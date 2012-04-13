@@ -23,11 +23,10 @@ import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLConnection;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +37,7 @@ import org.codehaus.jackson.map.ObjectMapper;
 import org.codehaus.jackson.smile.SmileFactory;
 import org.codehaus.jackson.smile.SmileParser;
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.bulk.BulkItemResponse;
 import org.elasticsearch.action.bulk.BulkRequestBuilder;
 import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.action.delete.DeleteRequest;
@@ -260,6 +260,7 @@ public class St9River extends AbstractRiverComponent implements River {
                 queue.drainTo(todo, bulkSize);
 
                 BulkRequestBuilder bulkRequestBuilder = client.prepareBulk();
+                final Map<String, Boolean> isReplay = new HashMap<String, Boolean>();
 
                 for (byte[] message : todo) {
                     try {
@@ -270,6 +271,9 @@ public class St9River extends AbstractRiverComponent implements River {
                         String type = (String) inbound.get("kind");
                         Long version = Long.parseLong((String) inbound
                                 .get("version"));
+
+                        isReplay.put(id, (Boolean) inbound.get("replay"));
+
                         Map<String, Object> theValue = (Map<String, Object>) inbound
                                 .get("curr");
 
@@ -307,10 +311,18 @@ public class St9River extends AbstractRiverComponent implements River {
                     @Override
                     public void onResponse(BulkResponse response) {
                         if (response.hasFailures()) {
-                            // TODO write to exception
-                            // queue?
-                            logger.warn("failed to execute"
-                                    + response.buildFailureMessage());
+                            for (BulkItemResponse item : response.items()) {
+                                String id = item.getId();
+
+                                if (isReplay.containsKey(id)
+                                        && isReplay.get(id)) {
+                                    logger.trace("replay error: "
+                                            + item.getFailureMessage());
+                                } else {
+                                    logger.info("execution error {}",
+                                            item.getFailureMessage());
+                                }
+                            }
                         }
                     }
 
@@ -320,12 +332,11 @@ public class St9River extends AbstractRiverComponent implements River {
                     }
                 });
 
-                logger.info("indexer updated {} documents",
-                        bulkRequestBuilder.numberOfActions());
+                logger.info("indexer updated {} documents ({} replay)",
+                        bulkRequestBuilder.numberOfActions(), isReplay.size());
             }
             logger.info("consumer thread exiting...");
         }
-
     }
 
     private class Replay implements Runnable {

@@ -19,7 +19,14 @@
 
 package org.elasticsearch.river.st9;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLConnection;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,12 +51,16 @@ import org.elasticsearch.river.AbstractRiverComponent;
 import org.elasticsearch.river.River;
 import org.elasticsearch.river.RiverName;
 import org.elasticsearch.river.RiverSettings;
-
-import com.g414.codec.lzf.LZFCodec;
+import org.joda.time.DateTime;
+import org.joda.time.DateTimeZone;
+import org.joda.time.format.DateTimeFormatter;
+import org.joda.time.format.ISODateTimeFormat;
 
 import redis.clients.jedis.BinaryJedisPubSub;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
+
+import com.g414.codec.lzf.LZFCodec;
 
 /**
  *
@@ -59,8 +70,12 @@ public class St9River extends AbstractRiverComponent implements River {
     private static final ObjectMapper mapper = new ObjectMapper();
     private static final LZFCodec compressCodec = new LZFCodec();
     private static final String ST9_REDIS_FULLTEXT_PATTERN = "/1.0/f/*";
+    private static final DateTimeFormatter format = ISODateTimeFormat
+            .basicDateTimeNoMillis();
 
     private final Client client;
+    private final String replayUrl;
+    private final int replayTimeoutSecs;
     private final String indexName;
     private final String redisHost;
     private final int redisPort;
@@ -68,6 +83,7 @@ public class St9River extends AbstractRiverComponent implements River {
     private volatile boolean closed = false;
     private volatile Thread consumerThread;
     private volatile Thread producerThread;
+    private volatile Thread replayThread;
     private volatile JedisPool jedisPool;
     private volatile Jedis jedis;
 
@@ -82,6 +98,11 @@ public class St9River extends AbstractRiverComponent implements River {
         if (settings.settings().containsKey("st9")) {
             Map<String, Object> redisSettings = (Map<String, Object>) settings
                     .settings().get("st9");
+            replayUrl = XContentMapValues.nodeStringValue(
+                    redisSettings.get("replayUrl"),
+                    "http://localhost:8080/1.0/f/replay");
+            replayTimeoutSecs = XContentMapValues.nodeIntegerValue(
+                    redisSettings.get("replayTimeoutSecs"), 300);
             redisHost = XContentMapValues.nodeStringValue(
                     redisSettings.get("redisHost"), "localhost");
             redisPort = XContentMapValues.nodeIntegerValue(
@@ -89,6 +110,8 @@ public class St9River extends AbstractRiverComponent implements River {
             indexName = XContentMapValues.nodeStringValue(
                     redisSettings.get("indexName"), "st9_index");
         } else {
+            replayUrl = "http://localhost:8080/1.0/f/replay";
+            replayTimeoutSecs = 300;
             redisHost = "localhost";
             redisPort = 6379;
             indexName = "st9_index";
@@ -121,6 +144,11 @@ public class St9River extends AbstractRiverComponent implements River {
                 new Consumer());
 
         consumerThread.start();
+
+        replayThread = EsExecutors.daemonThreadFactory(
+                settings.globalSettings(), "st9_river:replay").newThread(
+                new Replay());
+        replayThread.start();
     }
 
     @Override
@@ -133,11 +161,17 @@ public class St9River extends AbstractRiverComponent implements River {
         closed = true;
         producerThread.interrupt();
         consumerThread.interrupt();
+        replayThread.interrupt();
     }
 
     private class Producer extends BinaryJedisPubSub implements Runnable {
         public void run() {
+            logger.info("producer thread starting...");
             while (true) {
+                if (closed) {
+                    break;
+                }
+
                 try {
                     jedis = jedisPool.getResource();
                     jedis.psubscribe(new Producer(),
@@ -156,6 +190,7 @@ public class St9River extends AbstractRiverComponent implements River {
                     jedisPool.returnResource(jedis);
                 }
             }
+            logger.info("producer thread exiting...");
         }
 
         @Override
@@ -206,10 +241,10 @@ public class St9River extends AbstractRiverComponent implements River {
     private class Consumer implements Runnable {
         @Override
         public void run() {
+            logger.info("consumer thread starting...");
             while (true) {
                 if (closed) {
-                    logger.info("consumer closed - exiting...");
-                    return;
+                    break;
                 }
 
                 if (queue.isEmpty()) {
@@ -284,6 +319,78 @@ public class St9River extends AbstractRiverComponent implements River {
                         logger.warn("failed to execute bulk", e);
                     }
                 });
+
+                logger.info("indexer updated {} documents",
+                        bulkRequestBuilder.numberOfActions());
+            }
+            logger.info("consumer thread exiting...");
+        }
+
+    }
+
+    private class Replay implements Runnable {
+        @Override
+        public void run() {
+            logger.info("replay thread starting...");
+
+            while (true) {
+                if (closed) {
+                    logger.info("river closed - exiting...");
+                    return;
+                }
+
+                doReplayPost();
+
+                try {
+                    Thread.sleep(replayTimeoutSecs * 1000);
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+
+            logger.info("replay thread exiting...");
+        }
+    }
+
+    private void doReplayPost() {
+        BufferedReader reader = null;
+        try {
+            DateTime fromTime = (new DateTime()).minusSeconds(
+                    replayTimeoutSecs * 3).withZone(DateTimeZone.UTC);
+            DateTime toTime = (new DateTime()).plusHours(1).withZone(
+                    DateTimeZone.UTC);
+
+            StringBuilder urlString = new StringBuilder();
+            urlString.append(replayUrl);
+            urlString.append("?from=");
+            urlString.append(format.print(fromTime));
+            urlString.append("&to=");
+            urlString.append(format.print(toTime));
+
+            String theUrl = urlString.toString();
+
+            URL url = new URL(theUrl);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+
+            reader = new BufferedReader(new InputStreamReader(
+                    conn.getInputStream()));
+            for (String line = reader.readLine(); line != null; line = reader
+                    .readLine()) {
+                // throw it away
+            }
+
+            logger.info("replayed: {}", theUrl);
+        } catch (Exception e) {
+            logger.warn("replay error {}", e);
+        } finally {
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (IOException e) {
+                    logger.warn("replay reader io error {}", e);
+                }
             }
         }
     }

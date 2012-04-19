@@ -268,6 +268,8 @@ public class St9River extends AbstractRiverComponent implements River {
 
                         String action = (String) inbound.get("action");
                         String id = (String) inbound.get("id");
+                        String parentId = (String) inbound.get("parent");
+
                         String type = (String) inbound.get("kind");
                         Long version = Long.parseLong((String) inbound
                                 .get("version"));
@@ -284,6 +286,10 @@ public class St9River extends AbstractRiverComponent implements River {
                             theReq.setId(id);
                             theReq.setType(type);
                             theReq.setSource(theValue);
+
+                            if (parentId != null) {
+                                theReq.setParent(parentId);
+                            }
 
                             theReq.setVersionType(VersionType.EXTERNAL);
                             theReq.setVersion(version);
